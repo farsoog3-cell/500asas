@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Molfa Embroidery — صورة إلى تطريز</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body{font-family: sans-serif;background:#f3f4f6;}
+  .svg-wrap { width:100%; height:400px; display:flex; align-items:center; justify-content:center; background:#fff; border:1px solid #ccc; }
+  .svg-wrap svg{ max-width:100%; max-height:100%; }
+</style>
+</head>
+<body class="min-h-screen flex flex-col">
+<header class="bg-indigo-700 text-white py-3 text-center shadow">
+  <h1 class="text-xl font-bold">تحويل صورة → ملف تطريز (DST / DSE / SVG)</h1>
+</header>
+
+<main class="container mx-auto p-4 flex-grow">
+  <div class="bg-white rounded-xl shadow p-4 space-y-4">
+    <input id="file" type="file" accept="image/*" class="w-full p-2 border rounded"/>
+
+    <!-- اختيار الدقة -->
+    <label class="block">🔍 دقة الغرز (Spacing): 
+      <select id="spacing" class="border rounded p-1">
+        <option value="1">1 px (أعلى دقة)</option>
+        <option value="2" selected>2 px (متوسطة)</option>
+        <option value="3">3 px</option>
+        <option value="4">4 px</option>
+      </select>
+    </label>
+
+    <!-- اختيار الإطار -->
+    <label class="block">🖼️ حجم الإطار (Hoop Size): 
+      <select id="hoopSize" class="border rounded p-1">
+        <option value="100">100 × 100 mm</option>
+        <option value="200" selected>200 × 200 mm</option>
+        <option value="300">300 × 300 mm</option>
+      </select>
+    </label>
+
+    <button id="process" class="w-full bg-indigo-600 text-white py-2 rounded">🔧 تحويل</button>
+
+    <div class="flex gap-3">
+      <button id="downloadSvg" class="flex-1 bg-blue-600 text-white py-2 rounded hidden">⬇️ تحميل SVG</button>
+      <button id="downloadDst" class="flex-1 bg-green-600 text-white py-2 rounded hidden">⬇️ تحميل DST</button>
+      <button id="downloadDse" class="flex-1 bg-yellow-600 text-white py-2 rounded hidden">⬇️ تحميل DSE</button>
+    </div>
+
+    <div id="svgPreview" class="svg-wrap text-gray-500">لم يتم التوليد بعد</div>
+  </div>
+</main>
+
+<script>
+// تنزيل ملف
+function forceDownload(blob, name){
+  const url = URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=name;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+
+// تحويل النقاط إلى بايتات DST
+function encodeStitch(dx, dy){
+  const b=[0,0,0];
+  const mapX=[[1,0x01,0x02],[3,0x04,0x08],[9,0x20,0x10],[27,0x40,0x80]];
+  const mapY=[[1,0x01,0x02],[3,0x04,0x08],[9,0x20,0x10],[27,0x40,0x80]];
+  for(const [step,pos,neg] of mapX){
+    if(dx>=step){dx-=step;b[0]|=pos;}
+    else if(dx<=-step){dx+=step;b[0]|=neg;}
+  }
+  for(const [step,pos,neg] of mapY){
+    if(dy>=step){dy-=step;b[1]|=pos;}
+    else if(dy<=-step){dy+=step;b[1]|=neg;}
+  }
+  return b;
+}
+
+// بناء ملف DST/DSE
+function buildEmbBytes(points,label="MOLFA"){
+  const header=new Uint8Array(512).fill(0x20);
+  const txt=`LA:${label}\nST:${points.length}\nCO:1\n`;
+  for(let i=0;i<txt.length;i++) header[i]=txt.charCodeAt(i);
+
+  const body=[];
+  let px=0,py=0;
+  for(const [x,y] of points){
+    let dx=x-px, dy=y-py;
+    px=x; py=y;
+    body.push(...encodeStitch(dx,dy));
+  }
+  body.push(0,0,0xF3); // نهاية
+  const arr=new Uint8Array(header.length+body.length);
+  arr.set(header,0); arr.set(body,header.length);
+  return arr;
+}
+
+const fileInput=document.getElementById('file');
+const processBtn=document.getElementById('process');
+const spacingSel=document.getElementById('spacing');
+const hoopSel=document.getElementById('hoopSize');
+const svgPreview=document.getElementById('svgPreview');
+const btnSvg=document.getElementById('downloadSvg');
+const btnDst=document.getElementById('downloadDst');
+const btnDse=document.getElementById('downloadDse');
+
+let svgBlob=null,dstBlob=null,dseBlob=null;
+
+processBtn.addEventListener('click',()=>{
+  const f=fileInput.files[0];
+  if(!f){alert("اختر صورة أولاً");return;}
+  const spacing=parseInt(spacingSel.value);
+  const hoop=parseInt(hoopSel.value);
+  const img=new Image();
+  img.onload=()=>{
+    const cvs=document.createElement('canvas');
+    cvs.width=hoop; cvs.height=hoop;
+    const ctx=cvs.getContext('2d');
+    ctx.drawImage(img,0,0,hoop,hoop);
+    const d=ctx.getImageData(0,0,hoop,hoop);
+    const points=[];
+    for(let y=0;y<hoop;y+=spacing){
+      for(let x=0;x<hoop;x+=spacing){
+        const i=(y*hoop+x)*4;
+        const v=(d.data[i]+d.data[i+1]+d.data[i+2])/3;
+        if(v<128){ points.push([x,y]); }
+      }
+    }
+    // معاينة SVG
+    const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${hoop}" height="${hoop}">
+      <rect width="100%" height="100%" fill="white"/>
+      <polyline fill="none" stroke="red" stroke-width="0.5"
+      points="${points.map(p=>p.join(',')).join(' ')}"/>
+    </svg>`;
+    svgPreview.innerHTML=svg;
+    svgBlob=new Blob([svg],{type:"image/svg+xml"});
+
+    // ملفات DST و DSE
+    dstBlob=new Blob([buildEmbBytes(points,"MOLFA_DST")],{type:"application/octet-stream"});
+    dseBlob=new Blob([buildEmbBytes(points,"MOLFA_DSE")],{type:"application/octet-stream"});
+    btnSvg.classList.remove("hidden");
+    btnDst.classList.remove("hidden");
+    btnDse.classList.remove("hidden");
+  };
+  img.src=URL.createObjectURL(f);
+});
+
+btnSvg.onclick=()=>forceDownload(svgBlob,"pattern.svg");
+btnDst.onclick=()=>forceDownload(dstBlob,"pattern.dst");
+btnDse.onclick=()=>forceDownload(dseBlob,"pattern.dse");
+</script>
+</body>
+</html>
